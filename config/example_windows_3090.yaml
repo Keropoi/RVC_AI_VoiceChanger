@@ -1,0 +1,52 @@
+# Copy this file before editing it for a real voice. Values not listed here are
+# inherited from default.yaml.
+project:
+  name: chiikawa_voice_training
+  random_seed: 42
+
+paths:
+  training_audio_dir: data/training_audio
+  test_audio_dir: data/test_audio
+  rejected_audio_dir: data/rejected_audio
+  runs_dir: runs
+  rvc_repository: external/RVC
+  orchestration_python: .venv/Scripts/python.exe
+  rvc_python: external/RVC/.venv/Scripts/python.exe
+
+environment:
+  require_cuda: true
+  gpu_ids: [0]
+  minimum_free_disk_gb: 20
+  allow_official_asset_download: false
+
+model:
+  name: character_voice_v001
+  version: v2
+  sample_rate: 40k
+  use_f0: true
+  f0_method: rmvpe
+  speaker_id: 0
+
+training:
+  epochs: 200
+  save_every_epochs: 25
+  batch_size: 12
+  automatic_batch_size: true
+  batch_size_candidates: [16, 12, 8, 6, 4]
+  use_pretrained_model: true
+  use_gpu: true
+  mixed_precision: true
+  resume_if_available: true
+  maximum_oom_retries: 4
+
+testing:
+  enabled: true
+  maximum_test_files: 5
+  f0_method: rmvpe
+  transpose: 0
+  index_rate: 0.65
+  filter_radius: 3
+  rms_mix_rate: 0.25
+  protect: 0.33
+  output_format: wav
+  output_sample_rate: 48000

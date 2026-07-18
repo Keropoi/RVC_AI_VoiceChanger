@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RVC 训练与试听报告</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, "Microsoft YaHei", sans-serif; }
+    body { max-width: 1120px; margin: 0 auto; padding: 24px; line-height: 1.55; }
+    header, section { border: 1px solid #8886; border-radius: 12px; padding: 18px; margin: 0 0 18px; }
+    h1, h2, h3 { margin-top: 0; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-bottom: 1px solid #8885; padding: 8px; text-align: left; vertical-align: top; }
+    dl { display: grid; grid-template-columns: minmax(160px, 1fr) 3fr; gap: 6px 16px; }
+    dt { font-weight: 700; } dd { margin: 0; overflow-wrap: anywhere; }
+    audio { width: min(420px, 100%); }
+    .warning { color: #b45309; } .status { font-weight: 700; }
+    .review-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+    input, textarea { width: 100%; box-sizing: border-box; }
+    small { opacity: .75; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>RVC 训练、质量检查与试听报告</h1>
+    <p><strong>Run ID:</strong> {{ summary.get('run_id', 'unknown') }}</p>
+    <small>本报告完全离线；路径均相对于当前 run 目录。</small>
+  </header>
+
+  {% if warnings %}
+  <section class="warning">
+    <h2>警告</h2>
+    <ul>{% for warning in warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
+  </section>
+  {% endif %}
+
+  <section>
+    <h2>运行概况</h2>
+    <dl>{% for key, value in summary.items() %}<dt>{{ key }}</dt><dd>{{ value }}</dd>{% endfor %}</dl>
+  </section>
+
+  <section>
+    <h2>训练素材质量</h2>
+    {% if quality %}
+      <dl>{% for key, value in quality.items() if value is not mapping %}<dt>{{ key }}</dt><dd>{{ value }}</dd>{% endfor %}</dl>
+    {% else %}<p>没有可用的质量报告。</p>{% endif %}
+  </section>
+
+  <section>
+    <h2>训练结果</h2>
+    <dl>{% for key, value in artifacts.items() %}<dt>{{ key }}</dt><dd>{{ value }}</dd>{% endfor %}</dl>
+    {% if checkpoints %}
+    <h3>Checkpoints</h3>
+    <table><thead><tr><th>文件</th><th>大小</th><th>SHA-256</th></tr></thead><tbody>
+      {% for checkpoint in checkpoints %}<tr><td>{{ checkpoint.get('path', '') }}</td><td>{{ checkpoint.get('size_bytes', '') }}</td><td>{{ checkpoint.get('sha256', '') }}</td></tr>{% endfor %}
+    </tbody></table>
+    {% endif %}
+    {% if logs %}<h3>日志</h3><ul>{% for name, path in logs.items() %}<li><a href="{{ path }}">{{ name }}</a></li>{% endfor %}</ul>{% endif %}
+  </section>
+
+  <section>
+    <h2>测试试听</h2>
+    {% if tests %}
+      {% for test in tests %}
+      <article>
+        <h3>{{ test.get('name', test.get('test_name', '测试 ' ~ loop.index)) }}</h3>
+        <table><tbody>
+          <tr><th>原始音频</th><td>{% if test.original_audio_url %}<audio controls preload="metadata" src="{{ test.original_audio_url }}"></audio>{% else %}不可用{% endif %}</td></tr>
+          <tr><th>转换音频</th><td>{% if test.converted_audio_url %}<audio controls preload="metadata" src="{{ test.converted_audio_url }}"></audio>{% else %}不可用{% endif %}</td></tr>
+          <tr><th>Transpose / Index rate / Protect</th><td>{{ test.get('transpose', '') }} / {{ test.get('index_rate', '') }} / {{ test.get('protect', '') }}</td></tr>
+          <tr><th>LUFS / Peak / 状态</th><td>{{ test.get('output_lufs', test.get('lufs', '')) }} / {{ test.get('output_peak_dbfs', test.get('peak_dbfs', '')) }} / <span class="status">{{ test.get('status', '') }}</span></td></tr>
+        </tbody></table>
+        <h4>人工评价（请填写同目录 manual_review_template.csv 以持久保存）</h4>
+        <div class="review-grid">
+          {% for label in ['音色相似度', '清晰度', '自然度', '情绪保留', '金属音程度'] %}<label>{{ label }} 1–5<input type="number" min="1" max="5"></label>{% endfor %}
+        </div>
+        <label>备注<textarea rows="2"></textarea></label>
+      </article>
+      {% endfor %}
+    {% else %}<p>没有测试推理结果。</p>{% endif %}
+  </section>
+</body>
+</html>

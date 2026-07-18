@@ -1,0 +1,13 @@
+tests:
+  - file: test_male_low.wav
+    name: male_low_voice
+    transpose: 7
+    index_rate: 0.65
+    protect: 0.33
+    rms_mix_rate: 0.25
+  - file: test_female_high.wav
+    name: female_high_voice
+    transpose: 1
+    index_rate: 0.65
+    protect: 0.33
+    rms_mix_rate: 0.25

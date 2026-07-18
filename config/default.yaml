@@ -1,0 +1,127 @@
+project:
+  name: rvc_voice_training
+  random_seed: 42
+
+paths:
+  training_audio_dir: data/training_audio
+  test_audio_dir: data/test_audio
+  rejected_audio_dir: data/rejected_audio
+  runs_dir: runs
+  rvc_repository: external/RVC
+  orchestration_python: .venv/Scripts/python.exe
+  rvc_python: external/RVC/.venv/Scripts/python.exe
+
+environment:
+  require_cuda: true
+  gpu_ids: [0]
+  minimum_free_disk_gb: 20
+  allow_official_asset_download: false
+
+model:
+  name: character_voice_v001
+  version: v2
+  sample_rate: 40k
+  use_f0: true
+  f0_method: rmvpe
+  speaker_id: 0
+
+quality:
+  minimum_file_duration_seconds: 0.5
+  maximum_file_duration_seconds: 600
+  minimum_total_accepted_duration_minutes: 5
+  recommended_total_duration_minutes: 10
+  minimum_sample_rate: 22050
+  target_integrated_lufs: -20.0
+  acceptable_lufs_min: -32.0
+  acceptable_lufs_max: -12.0
+  maximum_sample_peak_dbfs: -0.1
+  maximum_clipping_ratio: 0.0001
+  maximum_dc_offset: 0.02
+  silence_threshold_dbfs: -50.0
+  maximum_silence_ratio: 0.45
+  minimum_estimated_snr_db: 15.0
+  recommended_estimated_snr_db: 25.0
+  fail_on_corrupt_file: false
+  fail_on_insufficient_total_duration: true
+
+preprocessing:
+  target_sample_rate: 40000
+  output_subtype: PCM_16
+  mono: true
+  trim_leading_trailing_silence: true
+  trim_threshold_dbfs: -48
+  trim_padding_ms: 120
+  loudness_normalization:
+    enabled: true
+    target_lufs: -20.0
+    maximum_gain_db: 12.0
+    minimum_gain_db: -12.0
+    true_peak_limit_db: -3.0
+  high_pass_filter:
+    enabled: false
+    cutoff_hz: 60
+  noise_reduction:
+    enabled: false
+
+slicing:
+  backend: rvc
+  minimum_segment_seconds: 1.0
+  preferred_segment_seconds: 4.0
+  maximum_segment_seconds: 12.0
+  silence_threshold_dbfs: -42
+  minimum_silence_duration_ms: 250
+  segment_padding_ms: 80
+
+training:
+  epochs: 200
+  save_every_epochs: 25
+  save_only_latest: false
+  save_every_weights: true
+  batch_size: 12
+  automatic_batch_size: true
+  batch_size_candidates: [16, 12, 8, 6, 4]
+  use_pretrained_model: true
+  use_gpu: true
+  gpu_ids: [0]
+  mixed_precision: true
+  cache_dataset_in_gpu: false
+  resume_if_available: true
+  stop_on_nan_loss: true
+  maximum_oom_retries: 4
+
+index:
+  enabled: true
+  algorithm: auto
+
+testing:
+  enabled: true
+  maximum_test_files: 5
+  allow_inference_without_index: false
+  f0_method: rmvpe
+  transpose: 0
+  index_rate: 0.65
+  filter_radius: 3
+  resample_sample_rate: 0
+  rms_mix_rate: 0.25
+  protect: 0.33
+  output_format: wav
+  output_sample_rate: 48000
+  maximum_duration_difference_ratio: 0.05
+  parameter_sweep:
+    enabled: false
+    transpose_values: [0, 3, 6]
+    index_rate_values: [0.5, 0.65, 0.8]
+    maximum_combinations_per_file: 9
+
+monitoring:
+  enabled: true
+  interval_seconds: 30
+  record_gpu: true
+  record_cpu: true
+  record_memory: true
+  record_disk: true
+
+report:
+  generate_html: true
+  generate_csv: true
+  include_audio_players: true
