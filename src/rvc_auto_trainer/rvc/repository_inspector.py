@@ -99,9 +99,17 @@ _CANDIDATES: Final[dict[str, tuple[tuple[str, str], ...]]] = {
     ),
 }
 
+_OPTIONAL_CANDIDATES: Final[dict[str, tuple[tuple[str, str], ...]]] = {
+    "extract_f0_rmvpe": (
+        ("infer/modules/train/extract/extract_f0_rmvpe.py", "webui-rmvpe-gpu"),
+        ("extract_f0_rmvpe.py", "legacy-rmvpe-gpu"),
+    ),
+}
+
 
 def _candidate_paths(purpose: str) -> tuple[str, ...]:
-    return tuple(path for path, _contract in _CANDIDATES.get(purpose, ()))
+    candidates = _CANDIDATES.get(purpose, _OPTIONAL_CANDIDATES.get(purpose, ()))
+    return tuple(path for path, _contract in candidates)
 
 
 class RepositoryInspector:
@@ -127,7 +135,8 @@ class RepositoryInspector:
 
         scripts: dict[str, ScriptInfo] = {}
         warnings: list[str] = []
-        for purpose, candidates in _CANDIDATES.items():
+        all_candidates = {**_CANDIDATES, **_OPTIONAL_CANDIDATES}
+        for purpose, candidates in all_candidates.items():
             for relative_path, contract in candidates:
                 candidate = (self.repository / Path(relative_path)).resolve()
                 if not _is_within(candidate, self.repository) or not candidate.is_file():
@@ -150,7 +159,8 @@ class RepositoryInspector:
         if "build_index" in missing:
             warnings.append(
                 "No standalone index CLI was recognized. Some RVC versions only "
-                "build indexes inside their web UI; this adapter will not emulate it."
+                "build indexes inside their web UI; callers must supply an explicit "
+                "reviewed index command."
             )
         layout = _classify_layout(scripts.values())
         return RVCRepositoryInfo(

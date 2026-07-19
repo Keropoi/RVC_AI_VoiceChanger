@@ -30,6 +30,7 @@ from ..audio.quality import (
 )
 from ..audio.reports import copy_rejected_audio, write_quality_reports
 from ..audio.slicer import slice_audio
+from ..evaluation_dataset import validate_frozen_test_manifest
 from ..reporting.html_report import generate_html_report
 from ..rvc.adapter import RVCAdapter
 from ..rvc.feature_extraction import FeatureRequest
@@ -41,6 +42,7 @@ from ..rvc.training import (
     discover_valid_checkpoints,
     validate_artifact,
 )
+from ..rvc.training_workspace import prepare_training_workspace
 from ..state import PipelineStage, StageResult
 from .orchestrator import PipelineOrchestrator
 from .stages import (
@@ -157,7 +159,21 @@ def _discover_audio(context: StageExecutionContext) -> StageResult:
     config = context.run_context.config
     training = discover_audio_files(config.paths.training_audio_dir)
     test = discover_audio_files(config.paths.test_audio_dir)
-    selected_tests = select_test_audio(test.files, config.testing.maximum_test_files)
+    manifest_entries = _load_test_manifest(config.paths.test_audio_dir)
+    if config.testing.require_frozen_manifest:
+        frozen = validate_frozen_test_manifest(config)
+        selected_tests = frozen.files
+        if len(selected_tests) > config.testing.maximum_test_files:
+            raise ValueError(
+                "Frozen test set exceeds testing.maximum_test_files; do not silently truncate it"
+            )
+    else:
+        selected_tests = _select_manifest_tests(
+            test.files,
+            manifest_entries,
+            config.testing.maximum_test_files,
+        )
+        _validate_optional_manifest_hashes(selected_tests, manifest_entries)
     duplicates = duplicate_hashes(training.files, selected_tests)
     if duplicates:
         names = ", ".join(sorted(duplicates)[:5])
@@ -282,6 +298,7 @@ def _preprocess(context: StageExecutionContext) -> StageResult:
             local_outputs.append(processed.output_path)
         if config.slicing.backend == "internal":
             segment_root = run_context.preprocessed_dir / "segments"
+            rvc_flat_input = run_context.preprocessed_dir / "rvc_input"
             segment_outputs: list[Path] = []
             for normalized in local_outputs:
                 result = slice_audio(
@@ -290,12 +307,19 @@ def _preprocess(context: StageExecutionContext) -> StageResult:
                     config,
                     quality_thresholds=config,
                 )
-                segment_outputs.extend(
-                    item.segment_file for item in result.accepted_segments
-                )
+                for item in result.accepted_segments:
+                    segment_outputs.append(item.segment_file)
+                    flat_name = f"{normalized.stem}__{item.segment_file.name}"
+                    flat_destination = rvc_flat_input / flat_name
+                    flat_destination.parent.mkdir(parents=True, exist_ok=True)
+                    if flat_destination.exists():
+                        raise FileExistsError(
+                            f"Refusing to overwrite RVC slice input: {flat_destination}"
+                        )
+                    shutil.copy2(item.segment_file, flat_destination)
                 segment_outputs.append(result.manifest_path)
             local_outputs.extend(segment_outputs)
-            rvc_input_dir = segment_root
+            rvc_input_dir = rvc_flat_input
     request = PreprocessRequest(
         input_dir=rvc_input_dir,
         experiment_dir=_experiment_dir(context),
@@ -337,6 +361,21 @@ def _train(context: StageExecutionContext) -> StageResult:
     config = run_context.config
     experiment = _experiment_dir(context)
     started_at = time.time()
+    workspace = prepare_training_workspace(
+        config.paths.rvc_repository,
+        experiment,
+        sample_rate=config.model.sample_rate,
+        version=config.model.version,
+        use_f0=config.model.use_f0,
+        speaker_id=config.model.speaker_id,
+        random_seed=config.project.random_seed,
+        mixed_precision=config.training.mixed_precision,
+        dry_run=context.dry_run,
+    )
+    pretrained_generator, pretrained_discriminator = _resolve_pretrained_pair(config)
+    expected_model = (
+        config.paths.rvc_repository / "assets" / "weights" / f"{run_context.run_id}.pth"
+    )
     request = TrainingRequest(
         experiment_dir=experiment,
         model_name=run_context.run_id,
@@ -350,10 +389,14 @@ def _train(context: StageExecutionContext) -> StageResult:
         automatic_batch_size=config.training.automatic_batch_size,
         batch_size_candidates=tuple(config.training.batch_size_candidates),
         maximum_oom_retries=config.training.maximum_oom_retries,
+        pretrained_generator=pretrained_generator,
+        pretrained_discriminator=pretrained_discriminator,
         save_only_latest=config.training.save_only_latest,
         cache_dataset_in_gpu=config.training.cache_dataset_in_gpu,
         save_every_weights=config.training.save_every_weights,
         resume_if_available=config.training.resume_if_available,
+        expected_model=expected_model,
+        model_validator_script=config.project_root / "scripts" / "validate_rvc_model.py",
         checkpoint_dir=experiment,
         dry_run=context.dry_run,
     )
@@ -362,10 +405,14 @@ def _train(context: StageExecutionContext) -> StageResult:
     if context.dry_run:
         return StageResult(
             outputs=(final_model,),
-            metadata={**result.metadata, "planned_model": str(final_model)},
+            metadata={
+                **result.metadata,
+                "planned_model": str(final_model),
+                "training_workspace": str(workspace.manifest_path),
+            },
             message="Dry run: training command planned",
         )
-    source_model = _find_fresh_model(context, result.outputs, started_at)
+    source_model = expected_model.resolve()
     final_model.parent.mkdir(parents=True, exist_ok=True)
     if final_model.exists():
         raise FileExistsError(f"Refusing to overwrite existing model: {final_model}")
@@ -401,8 +448,19 @@ def _train(context: StageExecutionContext) -> StageResult:
     }
     run_context.write_json("artifacts/model_manifest.json", manifest)
     return StageResult(
-        outputs=(final_model, run_context.artifacts_dir / "model_manifest.json", *copied_checkpoints),
-        metadata={**result.metadata, "model_validation": manifest},
+        outputs=(
+            final_model,
+            run_context.artifacts_dir / "model_manifest.json",
+            workspace.filelist_path,
+            workspace.config_path,
+            workspace.manifest_path,
+            *copied_checkpoints,
+        ),
+        metadata={
+            **result.metadata,
+            "model_validation": manifest,
+            "training_workspace": str(workspace.manifest_path),
+        },
         message="RVC model trained, copied and validated",
     )
 
@@ -416,6 +474,18 @@ def _build_index(context: StageExecutionContext) -> StageResult:
         experiment_dir=_experiment_dir(context),
         output_path=output,
         algorithm=config.index.algorithm,
+        command=(
+            str(config.paths.rvc_python),
+            str(config.project_root / "scripts" / "build_rvc_index.py"),
+            "--feature-dir",
+            "{feature_dir}",
+            "--output",
+            "{output_path}",
+            "--algorithm",
+            config.index.algorithm,
+            "--seed",
+            str(config.project.random_seed),
+        ),
         dry_run=context.dry_run,
     )
     result = context.adapter.build_index(request)
@@ -587,6 +657,9 @@ def _input_fingerprint(context: StageExecutionContext) -> str:
         "training": [(item.relative_path, item.sha256) for item in training.files],
         "testing": [(item.relative_path, item.sha256) for item in testing.files],
         "maximum_test_files": config.testing.maximum_test_files,
+        "test_manifest_sha256": _file_sha256(
+            config.paths.test_audio_dir / "test_manifest.yaml"
+        ),
     }
     return stable_stage_fingerprint(context.stage, payload)
 
@@ -616,6 +689,34 @@ def _feature_dir(context: StageExecutionContext) -> Path:
     version = context.run_context.config.model.version
     name = "3_feature768" if version == "v2" else "3_feature256"
     return _experiment_dir(context) / name
+
+
+def _resolve_pretrained_pair(config: object) -> tuple[Path | None, Path | None]:
+    """Resolve the exact G/D pair used by the configured official RVC model."""
+
+    if not config.training.use_pretrained_model:
+        return None, None
+    family = "pretrained_v2" if config.model.version == "v2" else "pretrained"
+    prefix = "f0" if config.model.use_f0 else ""
+    names = (
+        f"{prefix}G{config.model.sample_rate}.pth",
+        f"{prefix}D{config.model.sample_rate}.pth",
+    )
+    roots = (
+        config.paths.rvc_repository / "assets" / family,
+        config.paths.rvc_repository / family,
+        config.paths.pretrained_models_dir,
+    )
+    resolved: list[Path] = []
+    for name in names:
+        match = next((root / name for root in roots if (root / name).is_file()), None)
+        if match is None:
+            searched = ", ".join(str(root / name) for root in roots)
+            raise FileNotFoundError(
+                f"Configured pretrained RVC weight is missing ({name}). Searched: {searched}"
+            )
+        resolved.append(match.resolve())
+    return resolved[0], resolved[1]
 
 
 def _find_fresh_model(
@@ -702,17 +803,35 @@ def _select_manifest_tests(
     if not entries:
         return select_test_audio(files, maximum_files)
     by_path = {item.relative_path.replace("\\", "/").casefold(): item for item in files}
-    by_name = {Path(item.relative_path).name.casefold(): item for item in files}
     selected: list[AudioFile] = []
+    selected_hashes: set[str] = set()
     for entry in entries[:maximum_files]:
         configured = str(entry["file"]).replace("\\", "/")
-        item = by_path.get(configured.casefold()) or by_name.get(Path(configured).name.casefold())
+        configured_path = Path(configured)
+        if configured_path.is_absolute() or ".." in configured_path.parts:
+            raise ValueError(f"Unsafe test manifest path: {configured}")
+        item = by_path.get(configured.casefold())
         if item is None:
             raise FileNotFoundError(
                 f"Test manifest references a missing/unsupported audio file: {configured}"
             )
+        if item.sha256 in selected_hashes:
+            raise ValueError(f"Test manifest selects duplicate audio content: {configured}")
+        selected_hashes.add(item.sha256)
         selected.append(item)
     return tuple(selected)
+
+
+def _validate_optional_manifest_hashes(
+    files: Sequence[AudioFile], entries: Sequence[Mapping[str, Any]]
+) -> None:
+    """Honor hashes in a general manifest without requiring the fixed-five schema."""
+
+    for item in files:
+        entry = _manifest_entry_for(item, entries)
+        expected = str(entry.get("sha256", "")).strip().lower()
+        if expected and expected != item.sha256:
+            raise ValueError(f"Test manifest hash does not match {item.relative_path}")
 
 
 def _manifest_entry_for(
@@ -738,7 +857,8 @@ def _test_parameter_variants(
         "f0_method": entry.get("f0_method", testing.f0_method),
         "filter_radius": entry.get("filter_radius", testing.filter_radius),
         "resample_sample_rate": entry.get(
-            "resample_sample_rate", testing.resample_sample_rate
+            "resample_sample_rate",
+            testing.resample_sample_rate or getattr(testing, "output_sample_rate", 0),
         ),
     }
     sweep = testing.parameter_sweep

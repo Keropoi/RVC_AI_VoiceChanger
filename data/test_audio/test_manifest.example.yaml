@@ -1,13 +1,46 @@
 tests:
-  - file: test_male_low.wav
-    name: male_low_voice
-    transpose: 7
-    index_rate: 0.65
+  - id: zh_neutral
+    role: mandarin_neutral
+    language: zh
+    file: mandarin_neutral.wav
+    name: mandarin_neutral_10_15s
+    transpose: 0
+    index_rate: 0.50
     protect: 0.33
     rms_mix_rate: 0.25
-  - file: test_female_high.wav
-    name: female_high_voice
-    transpose: 1
-    index_rate: 0.65
+  - id: zh_phoneme_stress
+    role: mandarin_phoneme_stress
+    language: zh
+    file: mandarin_phoneme_stress.wav
+    name: mandarin_zh_ch_sh_j_q_x_nasals_tones_10_15s
+    transpose: 0
+    index_rate: 0.50
+    protect: 0.33
+    rms_mix_rate: 0.25
+  - id: zh_expressive
+    role: mandarin_expressive
+    language: zh
+    file: mandarin_expressive.wav
+    name: mandarin_fast_or_expressive_10_20s
+    transpose: 0
+    index_rate: 0.50
+    protect: 0.33
+    rms_mix_rate: 0.25
+  - id: zh_paragraph
+    role: mandarin_paragraph
+    language: zh
+    file: mandarin_paragraph.wav
+    name: mandarin_natural_paragraph_30_60s
+    transpose: 0
+    index_rate: 0.50
+    protect: 0.33
+    rms_mix_rate: 0.25
+  - id: ja_control
+    role: japanese_control
+    language: ja
+    file: japanese_control.wav
+    name: japanese_same_language_control_10_20s
+    transpose: 0
+    index_rate: 0.50
     protect: 0.33
     rms_mix_rate: 0.25

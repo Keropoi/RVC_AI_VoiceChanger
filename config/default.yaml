@@ -6,6 +6,14 @@ paths:
   training_audio_dir: data/training_audio
   test_audio_dir: data/test_audio
   rejected_audio_dir: data/rejected_audio
+  mixed_speaker_audio_dir: data/mixed_speaker_audio
+  speaker_segments_dir: data/speaker_segments
+  speaker_manifests_dir: data/speaker_manifests
+  speaker_selected_audio_dir: data/speaker_selected_audio
+  raw_audio_dir: data/raw_archive
+  training_candidates_dir: data/training_candidates
+  voice_reference_dir: data/voice_references
+  dataset_manifests_dir: data/dataset_manifests
   runs_dir: runs
   rvc_repository: external/RVC
   orchestration_python: .venv/Scripts/python.exe
@@ -72,6 +80,33 @@ slicing:
   minimum_silence_duration_ms: 250
   segment_padding_ms: 80
 
+curation:
+  coarse_split_enabled: true
+  minimum_chunk_seconds: 120
+  preferred_chunk_seconds: 210
+  maximum_chunk_seconds: 300
+  silence_threshold_dbfs: -42
+  minimum_silence_duration_ms: 400
+  chunk_padding_ms: 120
+  review_pass_fraction: 0.10
+  review_minimum_pass_samples: 50
+
+speaker_sorting:
+  diarization_model: pyannote/speaker-diarization-community-1
+  embedding_model: pyannote/wespeaker-voxceleb-resnet34-LM
+  token_environment_variable: HF_TOKEN
+  use_gpu: true
+  gpu_id: 0
+  minimum_speakers: null
+  maximum_speakers: null
+  minimum_segment_seconds: 1.0
+  maximum_segment_seconds: 30.0
+  merge_gap_seconds: 0.20
+  segment_padding_seconds: 0.05
+  target_similarity_threshold: 0.65
+  target_similarity_margin: 0.05
+  maximum_embedding_segments_per_speaker: 8
+
 training:
   epochs: 200
   save_every_epochs: 25
@@ -96,6 +131,7 @@ index:
 testing:
   enabled: true
   maximum_test_files: 5
+  require_frozen_manifest: false
   allow_inference_without_index: false
   f0_method: rmvpe
   transpose: 0

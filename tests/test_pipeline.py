@@ -9,8 +9,10 @@ from typing import Any
 
 import pytest
 
+from rvc_auto_trainer.audio.discovery import AudioFile
 from rvc_auto_trainer.pipeline.default_handlers import (
     _load_test_manifest,
+    _select_manifest_tests,
     _test_parameter_variants,
 )
 from rvc_auto_trainer.pipeline.orchestrator import (
@@ -178,3 +180,16 @@ def test_test_manifest_overrides_and_parameter_sweep_are_bounded(tmp_path: Path)
     testing.parameter_sweep.maximum_combinations_per_file = 3
     with pytest.raises(ValueError, match="exceeding maximum"):
         _test_parameter_variants(testing, entry)
+
+
+def test_manifest_order_controls_the_same_test_selection_used_for_leakage() -> None:
+    first = AudioFile(Path("a.wav"), "a.wav", "a" * 64, 10, ".wav")
+    requested = AudioFile(Path("z.wav"), "z.wav", "z" * 64, 10, ".wav")
+
+    selected = _select_manifest_tests(
+        (first, requested),
+        ({"file": "z.wav"}, {"file": "a.wav"}),
+        maximum_files=1,
+    )
+
+    assert selected == (requested,)

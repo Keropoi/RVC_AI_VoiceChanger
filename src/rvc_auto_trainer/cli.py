@@ -13,7 +13,9 @@ from rich.table import Table
 
 from . import __version__
 from .config import AppConfig, load_config
+from .dataset import apply_review_decisions, prepare_dataset
 from .environment import format_environment_report, inspect_environment, write_environment_report
+from .evaluation_dataset import freeze_test_manifest, validate_frozen_test_manifest
 from .exceptions import RVCAutoTrainerError
 from .logging_utils import close_logging, setup_logging
 from .pipeline.default_handlers import build_default_pipeline
@@ -21,6 +23,7 @@ from .pipeline.orchestrator import PipelineExecutionError, PipelineRunResult
 from .pipeline.run_context import RunContext, generate_run_id
 from .reporting.html_report import generate_html_report
 from .rvc.adapter import RVCAdapter
+from .speaker_sorting import apply_speaker_review, sort_speakers
 from .state import PipelineStage, StateStore
 
 app = typer.Typer(
@@ -69,7 +72,15 @@ def initialize_project(
     root = project_root.resolve()
     directories = (
         "config",
+        "data/mixed_speaker_audio",
+        "data/speaker_segments",
+        "data/speaker_manifests",
+        "data/speaker_selected_audio",
+        "data/raw_archive",
+        "data/training_candidates",
         "data/training_audio",
+        "data/voice_references",
+        "data/dataset_manifests",
         "data/test_audio",
         "data/rejected_audio",
         "external/RVC",
@@ -92,8 +103,24 @@ def initialize_project(
             created.append(destination)
 
     hints = {
+        root / "data" / "raw_archive" / "README.txt": (
+            "Place untouched, legally owned or authorized source recordings here. "
+            "prepare-data never edits or deletes them.\n"
+        ),
+        root / "data" / "mixed_speaker_audio" / "README.txt": (
+            "Place untouched authorized recordings containing multiple clear speakers here.\n"
+        ),
+        root / "data" / "speaker_selected_audio" / "README.txt": (
+            "Reviewed target-speaker clips are copied here; do not edit generated clips.\n"
+        ),
+        root / "data" / "training_candidates" / "README.txt": (
+            "Generated immutable coarse candidates appear here. Review them before promotion.\n"
+        ),
         root / "data" / "training_audio" / "README.txt": (
             "Place legally owned or authorized training audio here. Subdirectories are supported.\n"
+        ),
+        root / "data" / "voice_references" / "README.txt": (
+            "Keep 1 to 2 minutes of target-voice references excluded from training here.\n"
         ),
         root / "data" / "test_audio" / "README.txt": (
             "Place 3 to 5 legally owned or authorized test recordings here.\n"
@@ -112,6 +139,193 @@ def initialize_project(
         console.print("Created: " + ", ".join(str(path.relative_to(root)) for path in created))
     else:
         console.print("All starter files already existed; nothing was overwritten.")
+
+
+@app.command("prepare-data")
+def prepare_data(
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", exists=True, dir_okay=False),
+    source_label: str = typer.Option(
+        ...,
+        "--source-label",
+        help="Human-readable source/batch identifier recorded in the immutable manifest.",
+    ),
+    rights_note: str = typer.Option(
+        ...,
+        "--rights-note",
+        help="Short authorization or license note recorded before processing.",
+    ),
+    language: str = typer.Option(
+        "ja",
+        "--language",
+        help="Primary source language tag; informational and not used by RVC training.",
+    ),
+) -> None:
+    """Hash raw originals, make 2-5 minute candidates, and create a review queue."""
+
+    def action() -> int:
+        result = prepare_dataset(
+            load_config(config),
+            source_label=source_label,
+            rights_note=rights_note,
+            language=language,
+        )
+        console.print(
+            f"Prepared {result.candidate_file_count} candidate file(s) from "
+            f"{result.raw_file_count} raw original(s)."
+        )
+        console.print(f"Raw manifest: [bold]{result.raw_manifest_path}[/bold]")
+        console.print(f"Candidate quality: [bold]{result.candidate_quality_json_path}[/bold]")
+        console.print(
+            f"Review queue ({result.review_required_count} required): "
+            f"[bold]{result.review_queue_path}[/bold]"
+        )
+        console.print(f"Summary: [bold]{result.summary_path}[/bold]")
+        console.print(
+            "No audio was promoted automatically. Fill decision/category/reviewer_notes "
+            "before running apply-data-review."
+        )
+        return 0
+
+    _execute(action)
+
+
+@app.command("sort-speakers")
+def sort_speaker_audio(
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", exists=True, dir_okay=False),
+    num_speakers: Optional[int] = typer.Option(
+        None, "--num-speakers", min=1, help="Exact known speaker count per recording."
+    ),
+    min_speakers: Optional[int] = typer.Option(
+        None, "--min-speakers", min=1, help="Optional lower speaker-count bound."
+    ),
+    max_speakers: Optional[int] = typer.Option(
+        None, "--max-speakers", min=1, help="Optional upper speaker-count bound."
+    ),
+) -> None:
+    """Diarize mixed recordings and create a target-character review queue."""
+
+    def action() -> int:
+        result = sort_speakers(
+            load_config(config),
+            num_speakers=num_speakers,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+        )
+        console.print(
+            f"Created {result.segment_count} non-destructive segment(s) in "
+            f"{result.speaker_cluster_count} anonymous speaker cluster(s)."
+        )
+        console.print(f"Review queue: [bold]{result.review_queue_path}[/bold]")
+        console.print(
+            "Listen to sample_files and fill every decision with TARGET, OTHER, or REJECT. "
+            "Similarity scores never promote audio automatically."
+        )
+        return 0
+
+    _execute(action)
+
+
+@app.command("apply-speaker-review")
+def apply_reviewed_speakers(
+    review_queue: Path = typer.Option(
+        ...,
+        "--review-queue",
+        exists=True,
+        dir_okay=False,
+        help="speaker_review.csv produced by sort-speakers.",
+    ),
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", exists=True, dir_okay=False),
+) -> None:
+    """Copy explicitly reviewed target-character clips into the curation input."""
+
+    def action() -> int:
+        result = apply_speaker_review(load_config(config), review_queue)
+        console.print(
+            f"Copied {result.copied_segment_count} segment(s) from "
+            f"{result.target_cluster_count} target cluster(s), "
+            f"{result.copied_duration_minutes:.2f} minute(s) total."
+        )
+        console.print(f"Applied review: [bold]{result.summary_path}[/bold]")
+        console.print("Next: run prepare-data with source and rights metadata.")
+        return 0
+
+    _execute(action)
+
+
+@app.command("apply-data-review")
+def apply_data_review(
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", exists=True, dir_okay=False),
+    review_queue: Optional[Path] = typer.Option(
+        None,
+        "--review-queue",
+        exists=True,
+        dir_okay=False,
+        help="Review CSV; defaults to data/dataset_manifests/review_queue.csv.",
+    ),
+    accept_unreviewed_pass: bool = typer.Option(
+        False,
+        "--accept-unreviewed-pass",
+        help="Promote non-sampled PASS rows only after required reviews are complete.",
+    ),
+) -> None:
+    """Apply explicit KEEP/REFERENCE/REJECT decisions using copy-only promotion."""
+
+    def action() -> int:
+        result = apply_review_decisions(
+            load_config(config),
+            review_queue,
+            accept_unreviewed_pass=accept_unreviewed_pass,
+        )
+        console.print(
+            f"Promoted {result.kept_count} training file(s), retained "
+            f"{result.reference_count} reference file(s), and recorded "
+            f"{result.rejected_count} rejection(s)."
+        )
+        console.print(f"Selected training duration: {result.kept_duration_minutes:.2f} min")
+        if result.kept_duration_minutes < 15.0:
+            console.print("[yellow]Core set is below the 15-minute first-version target.[/yellow]")
+        elif result.kept_duration_minutes > 20.0:
+            console.print(
+                "[yellow]Core set exceeds 20 minutes; confirm every addition improves quality.[/yellow]"
+            )
+        console.print(f"Applied-review manifest: [bold]{result.summary_path}[/bold]")
+        return 0
+
+    _execute(action)
+
+
+@app.command("freeze-tests")
+def freeze_tests(
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", exists=True, dir_okay=False),
+) -> None:
+    """Freeze the five role-based Mandarin/Japanese test inputs by SHA-256."""
+
+    def action() -> int:
+        result = freeze_test_manifest(load_config(config))
+        console.print(
+            f"Frozen and leakage-checked {len(result.files)} test file(s): "
+            f"[bold]{result.manifest_path}[/bold]"
+        )
+        return 0
+
+    _execute(action)
+
+
+@app.command("validate-tests")
+def validate_tests(
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", exists=True, dir_okay=False),
+) -> None:
+    """Verify frozen test hashes, durations, roles, and training-set isolation."""
+
+    def action() -> int:
+        result = validate_frozen_test_manifest(load_config(config))
+        console.print(
+            f"Validated {len(result.files)} unchanged fixed test file(s): "
+            f"[bold]{result.manifest_path}[/bold]"
+        )
+        return 0
+
+    _execute(action)
 
 
 @app.command()

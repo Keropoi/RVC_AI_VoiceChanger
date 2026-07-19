@@ -36,7 +36,12 @@ def build_extract_f0_command(
 
     if request.f0_command:
         return tuple(request.f0_command)
-    script = repository.require_script("extract_f0")
+    if request.f0_method.lower() in {"rmvpe", "rmvpe_gpu"} and (
+        "extract_f0_rmvpe" in repository.scripts
+    ):
+        script = repository.require_script("extract_f0_rmvpe")
+    else:
+        script = repository.require_script("extract_f0")
     _validate_request(request)
     python_and_script = (str(repository.python_executable), str(script.path))
     if script.contract in {"webui-f0", "legacy-f0"}:

@@ -37,6 +37,7 @@ class TrainingRequest:
     save_every_weights: bool = True
     resume_if_available: bool = True
     expected_model: Path | None = None
+    model_validator_script: Path | None = None
     checkpoint_dir: Path | None = None
     minimum_model_bytes: int = 1_024
     minimum_checkpoint_bytes: int = 1_024
@@ -260,6 +261,14 @@ def _validate_training_request(request: TrainingRequest, batch_size: int) -> Non
     for pretrained in (request.pretrained_generator, request.pretrained_discriminator):
         if not request.dry_run and pretrained is not None and not Path(pretrained).is_file():
             raise FileNotFoundError(f"Configured pretrained model is missing: {pretrained}")
+    if (
+        not request.dry_run
+        and request.model_validator_script is not None
+        and not Path(request.model_validator_script).is_file()
+    ):
+        raise FileNotFoundError(
+            f"RVC model validator is missing: {request.model_validator_script}"
+        )
 
 
 def _replace_batch_placeholder(command: Sequence[str], batch_size: int) -> tuple[str, ...]:

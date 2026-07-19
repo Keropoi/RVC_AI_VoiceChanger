@@ -37,6 +37,7 @@ from .training import (
     validate_artifact,
     write_checkpoint_manifest,
 )
+from .training_workspace import validate_stage_artifacts
 
 
 class RVCAdapterError(RuntimeError):
@@ -115,11 +116,15 @@ class RVCAdapter:
             dry_run=request.dry_run,
             env=request.env,
         )
+        sample_names = () if request.dry_run else validate_stage_artifacts(
+            request.experiment_dir, "preprocess"
+        )
         return self._to_stage_result(
             result,
             command,
             outputs=(Path(request.experiment_dir).resolve(),),
             dry_run=request.dry_run,
+            extra_metadata={"validated_sample_count": len(sample_names)},
         )
 
     def extract_f0(self, request: FeatureRequest) -> StageResult:
@@ -133,11 +138,15 @@ class RVCAdapter:
             dry_run=request.dry_run,
             env=request.env,
         )
+        sample_names = () if request.dry_run else validate_stage_artifacts(
+            request.experiment_dir, "f0", version=request.version
+        )
         return self._to_stage_result(
             result,
             command,
             outputs=(Path(request.experiment_dir).resolve(),),
             dry_run=request.dry_run,
+            extra_metadata={"validated_sample_count": len(sample_names)},
         )
 
     def extract_features(self, request: FeatureRequest) -> StageResult:
@@ -151,11 +160,15 @@ class RVCAdapter:
             dry_run=request.dry_run,
             env=request.env,
         )
+        sample_names = () if request.dry_run else validate_stage_artifacts(
+            request.experiment_dir, "features", version=request.version
+        )
         return self._to_stage_result(
             result,
             command,
             outputs=(Path(request.experiment_dir).resolve(),),
             dry_run=request.dry_run,
+            extra_metadata={"validated_sample_count": len(sample_names)},
         )
 
     def train(self, request: TrainingRequest) -> StageResult:
@@ -165,6 +178,7 @@ class RVCAdapter:
         attempt_records: list[dict[str, Any]] = []
         final_result: ProcessResult | None = None
         final_command: tuple[str, ...] = ()
+        final_success = False
         selected_batch_size = attempts[0]
         stage_started_at = time.time()
         if request.dry_run:
@@ -219,18 +233,25 @@ class RVCAdapter:
                     final_result,
                     (final_result.stderr_log, final_result.stdout_log),
                 )
+                accepted_official_exit = _accepted_official_training_exit(
+                    final_result,
+                    request,
+                    not_before=stage_started_at,
+                )
+                final_success = final_result.success or accepted_official_exit
                 attempt_records.append(
                     {
                         "attempt": attempt_number,
                         "batch_size": selected_batch_size,
                         "return_code": final_result.return_code,
                         "cuda_oom": oom,
+                        "accepted_official_exit": accepted_official_exit,
                         "valid_checkpoint_count": len(checkpoint_evidence),
                         "stdout_log": str(final_result.stdout_log),
                         "stderr_log": str(final_result.stderr_log),
                     }
                 )
-                if final_result.success:
+                if final_success:
                     break
                 has_next = attempt_number < len(attempts)
                 if not (oom and has_next):
@@ -246,7 +267,7 @@ class RVCAdapter:
             if metrics_monitor is not None:
                 metrics_monitor.stop()
 
-        if final_result is None or not final_result.success:
+        if final_result is None or not final_success:
             raise RVCCommandError("RVC training ended without a successful process")
 
         outputs: list[Path] = []
@@ -294,6 +315,32 @@ class RVCAdapter:
                     result=final_result,
                     command=final_command,
                 )
+            if request.model_validator_script is not None:
+                validator_command = (
+                    str(self.python_executable),
+                    str(Path(request.model_validator_script).resolve()),
+                    "--model",
+                    str(model.path),
+                    "--sample-rate",
+                    request.sample_rate,
+                    "--version",
+                    request.version,
+                    "--use-f0",
+                    "1" if request.use_f0 else "0",
+                )
+                validator_result = self._execute(
+                    "validate_model",
+                    validator_command,
+                    timeout_seconds=120.0,
+                    dry_run=False,
+                    env=request.env,
+                )
+                assert validator_result is not None
+                metadata["model_structure_validation"] = {
+                    "return_code": validator_result.return_code,
+                    "stdout_log": str(validator_result.stdout_log),
+                    "stderr_log": str(validator_result.stderr_log),
+                }
             outputs.append(model.path)
         return StageResult(
             success=True,
@@ -476,6 +523,36 @@ class RVCAdapter:
         }
         with (self.logs_dir / "commands.log").open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def _accepted_official_training_exit(
+    result: ProcessResult,
+    request: TrainingRequest,
+    *,
+    not_before: float,
+) -> bool:
+    """Recognize upstream's intentional non-zero exit only with strong evidence."""
+
+    if result.return_code not in {2333333, 149} or result.timed_out or result.cancelled:
+        return False
+    if request.expected_model is None:
+        return False
+    validation = validate_artifact(
+        request.expected_model,
+        minimum_bytes=request.minimum_model_bytes,
+        allowed_suffixes=(".pth",),
+        not_before=not_before,
+    )
+    if not validation.valid:
+        return False
+    evidence = "\n".join((*result.stdout_tail, *result.stderr_tail))
+    for path in (result.stdout_log, result.stderr_log):
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                evidence += "\n" + "".join(handle.readlines()[-400:])
+        except OSError:
+            continue
+    return "Training is done. The program is closed." in evidence
 
 
 _SECRET_OPTION = re.compile(r"(?i)(token|password|secret|api[_-]?key)")

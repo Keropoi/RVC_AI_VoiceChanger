@@ -1,0 +1,44 @@
+# Japanese target timbre -> Mandarin dialogue. Values not listed here inherit
+# from default.yaml. Keep the five test inputs fixed across every experiment.
+project:
+  name: japanese_to_chinese_dialogue_v001
+  random_seed: 42
+
+paths:
+  raw_audio_dir: data/raw_archive
+  training_candidates_dir: data/training_candidates
+  training_audio_dir: data/training_audio
+  voice_reference_dir: data/voice_references
+  dataset_manifests_dir: data/dataset_manifests
+  test_audio_dir: data/test_audio
+
+model:
+  name: japanese_to_chinese_dialogue_v001
+  version: v2
+  sample_rate: 40k
+  use_f0: true
+  f0_method: rmvpe
+
+slicing:
+  # Official RVC performs the final silence split and ~3.7 second slicing.
+  backend: rvc
+
+curation:
+  coarse_split_enabled: true
+  minimum_chunk_seconds: 120
+  preferred_chunk_seconds: 210
+  maximum_chunk_seconds: 300
+  review_pass_fraction: 0.10
+  review_minimum_pass_samples: 50
+
+testing:
+  enabled: true
+  maximum_test_files: 5
+  require_frozen_manifest: true
+  transpose: 0
+  index_rate: 0.50
+  parameter_sweep:
+    enabled: true
+    transpose_values: [0]
+    index_rate_values: [0.35, 0.50, 0.65, 0.80]
+    maximum_combinations_per_file: 4

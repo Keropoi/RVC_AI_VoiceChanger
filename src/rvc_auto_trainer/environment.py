@@ -135,12 +135,48 @@ class EnvironmentDoctor:
         script_check, script_facts = _check_rvc_scripts(repository)
         checks["rvc_scripts"] = script_check
         facts.update(script_facts)
+        index_builder = self.config.project_root / "scripts" / "build_rvc_index.py"
+        index_required = bool(self.config.index.enabled)
+        checks["index_builder"] = EnvironmentCheck(
+            name="Project FAISS index builder",
+            status=(
+                CheckStatus.PASS
+                if index_builder.is_file()
+                else CheckStatus.FAIL
+                if index_required
+                else CheckStatus.WARNING
+            ),
+            message=(
+                f"Found {index_builder}"
+                if index_builder.is_file()
+                else f"Project index builder is missing: {index_builder}"
+            ),
+            required=index_required,
+            expected_paths=() if index_builder.is_file() else (index_builder,),
+        )
+        model_validator = self.config.project_root / "scripts" / "validate_rvc_model.py"
+        checks["model_validator"] = EnvironmentCheck(
+            name="Project RVC model validator",
+            status=CheckStatus.PASS if model_validator.is_file() else CheckStatus.FAIL,
+            message=(
+                f"Found {model_validator}"
+                if model_validator.is_file()
+                else f"Project model validator is missing: {model_validator}"
+            ),
+            required=True,
+            expected_paths=() if model_validator.is_file() else (model_validator,),
+        )
 
         commit_check, commit = self._check_git_commit(repository)
         checks["rvc_git_commit"] = commit_check
         facts["rvc_git_commit"] = commit
 
         checks["rvc_python"] = self._check_python_executable(self.config.paths.rvc_python)
+        checks["rvc_index_dependencies"] = _check_rvc_index_dependencies(
+            self.config.paths.rvc_python,
+            required=bool(self.config.index.enabled),
+            timeout=self.command_timeout,
+        )
         checks.update(_check_rvc_assets(repository, self.config))
 
         writable_check, disk_facts = _check_output_and_disk(
@@ -586,6 +622,42 @@ def _check_directory(
     )
 
 
+def _check_rvc_index_dependencies(
+    executable: Path, *, required: bool, timeout: float
+) -> EnvironmentCheck:
+    """Verify that the independent RVC runtime can import FAISS and NumPy."""
+
+    if not executable.is_file():
+        return EnvironmentCheck(
+            name="RVC FAISS dependencies",
+            status=CheckStatus.FAIL if required else CheckStatus.WARNING,
+            message="RVC Python is missing, so FAISS cannot be checked",
+            required=required,
+            expected_paths=(executable,),
+        )
+    code = (
+        "import faiss, json, numpy; "
+        "print(json.dumps({'faiss': getattr(faiss, '__version__', 'available'), "
+        "'numpy': numpy.__version__}))"
+    )
+    result = _run_command((str(executable), "-c", code), timeout=timeout)
+    if result.returncode != 0:
+        return EnvironmentCheck(
+            name="RVC FAISS dependencies",
+            status=CheckStatus.FAIL if required else CheckStatus.WARNING,
+            message="RVC environment cannot import faiss and numpy",
+            required=required,
+            details={"stderr": _tail(result.stderr)},
+        )
+    return EnvironmentCheck(
+        name="RVC FAISS dependencies",
+        status=CheckStatus.PASS,
+        message="RVC environment can build FAISS indexes",
+        required=required,
+        details={"runtime": result.stdout.strip()},
+    )
+
+
 _RVC_SCRIPT_CANDIDATES: Mapping[str, tuple[str, ...]] = {
     "preprocess": (
         "infer/modules/train/preprocess.py",
@@ -601,7 +673,7 @@ _RVC_SCRIPT_CANDIDATES: Mapping[str, tuple[str, ...]] = {
         "extract_feature_print.py",
     ),
     "train": ("infer/modules/train/train.py", "train_nsf_sim_cache_sid_load_pretrain.py"),
-    "infer": ("infer-web.py", "tools/infer_cli.py"),
+    "infer": ("tools/infer_cli.py", "infer_cli.py", "rvc_cli.py"),
 }
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -71,12 +72,20 @@ def build_inference_command(
     options = set(script.argparse_options)
     semantic_options: tuple[tuple[Sequence[str], str, bool], ...] = (
         (("--input-path", "--input_path", "--input", "-i"), replacements["{input_path}"], True),
-        (("--output-path", "--output_path", "--output", "-o"), replacements["{output_path}"], True),
-        (("--model-path", "--model_path", "--model", "-m"), replacements["{model_path}"], True),
+        (
+            ("--output-path", "--output_path", "--opt_path", "--output", "-o"),
+            replacements["{output_path}"],
+            True,
+        ),
+        (
+            ("--model-path", "--model_path", "--model_name", "--model", "-m"),
+            replacements["{model_path}"],
+            True,
+        ),
         (("--index-path", "--index_path", "--index"), replacements["{index_path}"], False),
         (("--speaker-id", "--speaker_id", "--sid"), str(request.speaker_id), False),
         (("--transpose", "--f0up-key", "--f0up_key", "--pitch"), str(request.transpose), False),
-        (("--f0-method", "--f0_method"), request.f0_method, False),
+        (("--f0-method", "--f0_method", "--f0method"), request.f0_method, False),
         (("--index-rate", "--index_rate"), str(request.index_rate), False),
         (("--filter-radius", "--filter_radius"), str(request.filter_radius), False),
         (("--resample-sr", "--resample_sr"), str(request.resample_sample_rate), False),
@@ -91,6 +100,8 @@ def build_inference_command(
             if required:
                 missing.append("/".join(aliases))
             continue
+        if option == "--model_name":
+            value = _official_model_name(repository, request.model_path)
         if value or required:
             command.extend((option, value))
     if missing:
@@ -133,6 +144,25 @@ def _validate_inference_request(request: InferenceRequest) -> None:
 
 def _first_option(options: set[str], aliases: Sequence[str]) -> str | None:
     return next((alias for alias in aliases if alias in options), None)
+
+
+def _official_model_name(repository: RVCRepositoryInfo, model_path: Path) -> str:
+    """Render a model path for the official ``--model_name`` CLI contract.
+
+    Upstream prefixes this argument with ``assets/weights`` rather than accepting
+    an absolute path. A relative path addresses the caller's exact artifact
+    without copying it into the external checkout.
+    """
+
+    weight_root = repository.repository / "assets" / "weights"
+    try:
+        return os.path.relpath(Path(model_path).resolve(), weight_root.resolve())
+    except ValueError as exc:
+        raise RVCRepositoryInspectionError(
+            "The official RVC --model_name CLI cannot address a model on a "
+            "different filesystem volume from its assets/weights directory. "
+            "Move the model to the RVC volume or provide an explicit command."
+        ) from exc
 
 
 def _replace_placeholders(

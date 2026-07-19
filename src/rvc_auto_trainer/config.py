@@ -41,6 +41,14 @@ class PathsConfig(ConfigModel):
     training_audio_dir: Path = Path("data/training_audio")
     test_audio_dir: Path = Path("data/test_audio")
     rejected_audio_dir: Path = Path("data/rejected_audio")
+    mixed_speaker_audio_dir: Path = Path("data/mixed_speaker_audio")
+    speaker_segments_dir: Path = Path("data/speaker_segments")
+    speaker_manifests_dir: Path = Path("data/speaker_manifests")
+    speaker_selected_audio_dir: Path = Path("data/speaker_selected_audio")
+    raw_audio_dir: Path = Path("data/raw_archive")
+    training_candidates_dir: Path = Path("data/training_candidates")
+    voice_reference_dir: Path = Path("data/voice_references")
+    dataset_manifests_dir: Path = Path("data/dataset_manifests")
     runs_dir: Path = Path("runs")
     rvc_repository: Path = Path("external/RVC")
     orchestration_python: Path = Path(".venv/Scripts/python.exe")
@@ -199,6 +207,71 @@ class SlicingConfig(ConfigModel):
         return self
 
 
+class DatasetCurationConfig(ConfigModel):
+    """Non-destructive raw-audio curation and human-review settings."""
+
+    coarse_split_enabled: bool = True
+    minimum_chunk_seconds: float = Field(default=120.0, gt=0.0)
+    preferred_chunk_seconds: float = Field(default=210.0, gt=0.0)
+    maximum_chunk_seconds: float = Field(default=300.0, gt=0.0)
+    silence_threshold_dbfs: float = -42.0
+    minimum_silence_duration_ms: int = Field(default=400, ge=0)
+    chunk_padding_ms: int = Field(default=120, ge=0)
+    review_pass_fraction: float = Field(default=0.10, gt=0.0, le=1.0)
+    review_minimum_pass_samples: int = Field(default=50, ge=0)
+
+    @model_validator(mode="after")
+    def validate_chunk_order(self) -> "DatasetCurationConfig":
+        """Keep coarse chunks in the configured minimum/preferred/maximum order."""
+
+        if not (
+            self.minimum_chunk_seconds
+            <= self.preferred_chunk_seconds
+            <= self.maximum_chunk_seconds
+        ):
+            raise ValueError(
+                "curation chunk durations must satisfy minimum <= preferred <= maximum"
+            )
+        return self
+
+
+class SpeakerSortingConfig(ConfigModel):
+    """Optional local diarization and target-speaker review settings."""
+
+    diarization_model: str = "pyannote/speaker-diarization-community-1"
+    embedding_model: str = "pyannote/wespeaker-voxceleb-resnet34-LM"
+    token_environment_variable: str = "HF_TOKEN"
+    use_gpu: bool = True
+    gpu_id: int = Field(default=0, ge=0)
+    minimum_speakers: Optional[int] = Field(default=None, ge=1)
+    maximum_speakers: Optional[int] = Field(default=None, ge=1)
+    minimum_segment_seconds: float = Field(default=1.0, gt=0.0)
+    maximum_segment_seconds: float = Field(default=30.0, gt=0.0)
+    merge_gap_seconds: float = Field(default=0.20, ge=0.0)
+    segment_padding_seconds: float = Field(default=0.05, ge=0.0)
+    target_similarity_threshold: float = Field(default=0.65, ge=-1.0, le=1.0)
+    target_similarity_margin: float = Field(default=0.05, ge=0.0, le=2.0)
+    maximum_embedding_segments_per_speaker: int = Field(default=8, ge=1)
+
+    @model_validator(mode="after")
+    def validate_speaker_sorting(self) -> "SpeakerSortingConfig":
+        """Reject ambiguous speaker bounds and invalid segment duration order."""
+
+        if (
+            self.minimum_speakers is not None
+            and self.maximum_speakers is not None
+            and self.minimum_speakers > self.maximum_speakers
+        ):
+            raise ValueError("minimum_speakers cannot exceed maximum_speakers")
+        if self.minimum_segment_seconds > self.maximum_segment_seconds:
+            raise ValueError(
+                "speaker sorting segment durations must satisfy minimum <= maximum"
+            )
+        if not self.token_environment_variable.strip():
+            raise ValueError("token_environment_variable must not be empty")
+        return self
+
+
 class TrainingConfig(ConfigModel):
     """RVC training, checkpoint, and OOM-retry settings."""
 
@@ -279,6 +352,7 @@ class TestingConfig(ConfigModel):
 
     enabled: bool = True
     maximum_test_files: int = Field(default=5, gt=0)
+    require_frozen_manifest: bool = False
     allow_inference_without_index: bool = False
     f0_method: str = "rmvpe"
     transpose: int = 0
@@ -322,6 +396,8 @@ class AppConfig(ConfigModel):
     quality: QualityConfig = Field(default_factory=QualityConfig)
     preprocessing: PreprocessingConfig = Field(default_factory=PreprocessingConfig)
     slicing: SlicingConfig = Field(default_factory=SlicingConfig)
+    curation: DatasetCurationConfig = Field(default_factory=DatasetCurationConfig)
+    speaker_sorting: SpeakerSortingConfig = Field(default_factory=SpeakerSortingConfig)
     training: TrainingConfig = Field(default_factory=TrainingConfig)
     index: IndexConfig = Field(default_factory=IndexConfig)
     testing: TestingConfig = Field(default_factory=TestingConfig)
@@ -501,6 +577,7 @@ def load_yaml_config(
 __all__ = [
     "AppConfig",
     "Config",
+    "DatasetCurationConfig",
     "EnvironmentConfig",
     "HighPassFilterConfig",
     "IndexConfig",
@@ -516,6 +593,7 @@ __all__ = [
     "RVCConfig",
     "ReportConfig",
     "SlicingConfig",
+    "SpeakerSortingConfig",
     "TestingConfig",
     "TrainingConfig",
     "infer_project_root",

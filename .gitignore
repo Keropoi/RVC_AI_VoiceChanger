@@ -1,5 +1,6 @@
 # Python / virtual environments
 .venv/
+.speaker_venv/
 __pycache__/
 *.py[cod]
 *.pyd
@@ -21,8 +22,24 @@ desktop.ini
 # Runtime outputs and user audio
 runs/*
 !runs/.gitkeep
+data/raw_archive/*
+!data/raw_archive/README.txt
+data/mixed_speaker_audio/*
+!data/mixed_speaker_audio/README.txt
+data/speaker_segments/*
+!data/speaker_segments/README.txt
+data/speaker_manifests/*
+!data/speaker_manifests/README.txt
+data/speaker_selected_audio/*
+!data/speaker_selected_audio/README.txt
+data/training_candidates/*
+!data/training_candidates/README.txt
 data/training_audio/*
 !data/training_audio/README.txt
+data/voice_references/*
+!data/voice_references/README.txt
+data/dataset_manifests/*
+!data/dataset_manifests/README.txt
 data/test_audio/*
 !data/test_audio/README.txt
 !data/test_audio/test_manifest.example.yaml
