@@ -14,7 +14,7 @@
 
 ## 安装可选的独立环境
 
-说话人分拣使用独立 `.speaker_venv`，不会改变 RVC 的 `.venv`：
+说话人分拣使用独立 `.speaker_venv`，不会改变 RVC 的 `.venv`。`pyannote.audio 4.x` 要求 Python 3.10 或更高；当前安装脚本使用 Python 3.11，未检测到时会先询问是否通过 winget 安装：
 
 ```bat
 scripts\setup_speaker_venv.bat
